@@ -1,0 +1,25 @@
+# model weights - never commit
+models/
+*.safetensors
+*.bin
+*.pt
+*.onnx
+*.gguf
+
+# the grader-visible image reference must not be advertised (see challenge PDF)
+submission.env
+*.image_ref
+IMAGE_REF*
+
+# build + local testing artefacts
+out/
+samples/
+output/
+*.log
+.dockerenv
+.env
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# scratch archives

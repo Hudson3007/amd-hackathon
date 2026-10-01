@@ -1,0 +1,35 @@
+# Installed with --no-deps on purpose.
+#
+# Any package that declares a torch dependency will make pip resolve and install
+# a CUDA build of torch, silently over the ROCm build in the mandated base
+# image. The failure surfaces at runtime as
+#   RuntimeError: operator torchvision::nms does not exist
+# and never names torch, so the real cause is invisible. Listing the full
+# transitive set by hand keeps --no-deps safe.
+#
+# After every change, verify with:
+#   python3 -c "import torch; print(torch.__version__)"
+# which must end in +rocm...  (the Dockerfile does this as a build step)
+
+# model runtime
+transformers
+tokenizers
+safetensors
+accelerate
+huggingface_hub
+
+# corpus parsers
+pypdf
+openpyxl
+
+# vision
+pillow
+
+# transformers / tokenizers transitive deps
+filelock
+packaging
+pyyaml
+regex
+requests
+tqdm
+numpy

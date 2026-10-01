@@ -1,0 +1,10 @@
+transformers>=4.49
+accelerate>=1.0
+numpy
+pillow
+
+# Deliberately NOT listed:
+#   torchvision  - the PyPI wheel is CUDA-linked and would drag in nvidia-*
+#                 wheels (bloat, possible 60 GiB breach) and can shadow ROCm torch.
+#   qwen-vl-utils - pulls torchvision. app/pipeline.py falls back to the
+#                 AutoProcessor path, which is correct for single images.
