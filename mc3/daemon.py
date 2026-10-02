@@ -336,9 +336,24 @@ def load_model():
     try:
         log(f"loading {MODEL_ID}")
         STATE.processor = AutoProcessor.from_pretrained(MODEL_ID)
-        model = AutoModelForImageTextToText.from_pretrained(
-            MODEL_ID, torch_dtype=torch.bfloat16, device_map="auto"
+        # float32 + eager is required on ROCm, not an optimisation choice. On
+        # MI300X / ROCm 6.4 the Qwen2.5-VL vision tower segfaults (SIGSEGV)
+        # inside model.visual() when weights are bfloat16 or float16, before
+        # any generation happens. The same crash was found and fixed in MC2
+        # (app/pipeline.py). eager also avoids the ROCm SDPA kernel, which
+        # segfaults on the same tensor shapes.
+        dtype = torch.float32
+        kwargs = dict(
+            dtype=dtype,
+            attn_implementation="eager",
         )
+        try:
+            model = AutoModelForImageTextToText.from_pretrained(MODEL_ID, **kwargs)
+        except TypeError:
+            # older transformers only accepts torch_dtype
+            kwargs.pop("dtype", None)
+            kwargs["torch_dtype"] = dtype
+            model = AutoModelForImageTextToText.from_pretrained(MODEL_ID, **kwargs)
         model.eval()
         STATE.model = model
         log("model ready")
