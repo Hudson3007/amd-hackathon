@@ -377,9 +377,20 @@ def load_model():
             kwargs.pop("dtype", None)
             kwargs["torch_dtype"] = dtype
             model = AutoModelForImageTextToText.from_pretrained(MODEL_ID, **kwargs)
+        # device_map="auto" is deliberately not used: it drags in accelerate and
+        # silently decides placement. Without it from_pretrained leaves the model
+        # on CPU, and a 7B fp32 model on CPU generates at ~1-3 tokens/sec, which
+        # looks like a hang rather than an error. Move it explicitly and log
+        # where it landed, so this can never fail quietly again.
+        device = "cuda" if torch.cuda.is_available() else "cpu"
+        model = model.to(device)
         model.eval()
         STATE.model = model
-        log("model ready")
+        placed = next(model.parameters()).device
+        log(f"model ready on {placed}")
+        if device == "cpu":
+            log("WARNING no CUDA device: the model is on CPU and will be "
+                "far too slow to answer within the harness timeout")
     except Exception as exc:
         log(f"model load failed, running retrieval-only: {exc}")
         traceback.print_exc()
