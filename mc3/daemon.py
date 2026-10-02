@@ -66,6 +66,33 @@ def log(msg):
     print(f"[mc3] {msg}", flush=True)
 
 
+def log_vram(stage, reset=False):
+    """Report GPU memory so we can see the 48 GiB cap coming.
+
+    The challenge limits VRAM to 1-48 GiB and samples it continuously, so the
+    number that matters is the peak, not the idle figure. Weights alone are
+    ~28 GiB in the float32 this ROCm port requires, which leaves little room for
+    the KV cache and the eager-attention activations. Reading it from torch is
+    deliberate: rocm-smi is not present on every image we run on, and a missing
+    tool must not be the reason a hard limit goes unmeasured.
+    """
+    try:
+        import torch
+
+        if not torch.cuda.is_available():
+            return
+        if reset:
+            torch.cuda.reset_peak_memory_stats()
+        gib = 2 ** 30
+        log(
+            f"VRAM {stage}: allocated {torch.cuda.memory_allocated() / gib:.1f} GiB, "
+            f"reserved {torch.cuda.memory_reserved() / gib:.1f} GiB, "
+            f"peak {torch.cuda.max_memory_reserved() / gib:.1f} GiB"
+        )
+    except Exception as exc:
+        log(f"VRAM {stage}: unavailable ({exc})")
+
+
 def tokenize(text):
     return [t for t in re.split(r"[^0-9a-z]+", text.lower()) if t and t not in STOPWORDS]
 
@@ -388,6 +415,7 @@ def load_model():
         STATE.model = model
         placed = next(model.parameters()).device
         log(f"model ready on {placed}")
+        log_vram("after model load")
         if device == "cpu":
             log("WARNING no CUDA device: the model is on CPU and will be "
                 "far too slow to answer within the harness timeout")
@@ -548,7 +576,18 @@ def dispatch(payload):
             stats = ensure_indexed(payload.get("root") or CORPUS_DIR)
             return {"ok": True, "stats": stats}
         if op == "query":
-            return answer_question(payload.get("query", ""))
+            # Baseline is reset after model load, so resetting here makes the
+            # reported peak this query alone: context prefill and decoding on
+            # top of the resident weights.
+            try:
+                import torch
+
+                torch.cuda.reset_peak_memory_stats()
+            except Exception:
+                pass
+            result = answer_question(payload.get("query", ""))
+            log_vram("after query")
+            return result
         return {"error": f"unknown op {op}"}
     except Exception as exc:
         traceback.print_exc()
