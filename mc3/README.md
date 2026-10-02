@@ -213,7 +213,51 @@ Recorded because the silent ones are the interesting ones.
 | Silent caption failure | Images unretrievable with no error anywhere; every image question scores zero |
 | No retrieval-accuracy test | 43 structural tests, none checking that retrieval found the right file |
 
-## Known limitations
+## Scale ceiling: this solution is locked to a 7B model
+
+**Read this before anyone tries to "improve" the model choice.** Swapping in a
+larger model does not make this better — it makes it score **zero overall**, by
+breaching the 48 GiB VRAM gate.
+
+The chain is unforgiving:
+
+1. ROCm segfaults the Qwen2.5-VL vision tower in bf16/fp16, so **fp32 is forced**.
+2. fp32 is 4 bytes per parameter, so weight memory scales linearly and steeply.
+3. The VRAM gate is a hard 48 GiB, sampled continuously.
+
+| Model | fp32 weights alone | Verdict |
+|---|---|---|
+| **Qwen2.5-VL-7B** | ~28 GiB | **works** — 39.7 GiB peak measured |
+| Qwen2.5-VL-14B | ~52 GiB | **impossible** — weights alone exceed the cap, with zero context |
+| Qwen2.5-VL-32B | ~120 GiB | impossible by an order of magnitude |
+
+14B in bf16 would fit at ~26 GiB, and that is the only configuration that would
+make a bigger model viable — but bf16 is exactly what crashes. So the ceiling is
+not a tuning choice we made; it falls out of the ROCm bug plus the VRAM gate.
+
+Measured headroom on the 7B is **8.3 GiB**, and most of that is transient
+eager-attention allocation rather than reusable slack. There is no room for a
+meaningfully larger model.
+
+### If you need more capability, these are the only real routes
+
+- **Fix or wait out the bf16 segfault.** This is the unlock. bf16 halves weight
+  memory, which puts 14B in range and frees VRAM for longer context. Everything
+  else is a workaround for a compiler or kernel bug.
+- **Drop to a 3B model.** Frees roughly 20 GiB, which buys context headroom, at a
+  real cost in answer quality and OCR accuracy.
+- **Quantise (fp8/int8).** Untested here. ROCm kernel coverage is uneven and the
+  vision tower is already fragile; this is a research task, not a config change.
+
+### The same ceiling applies to image resolution
+
+`IMAGE_CONTEXT` caps *output* caption tokens, but **input** vision tokens scale
+with image resolution. A very high-resolution diagram produces a proportionally
+larger prefill, and attention memory grows with the square of sequence length.
+Enormous images are therefore the other way to push this over the gate. If the
+graded corpus contains very large scans, expect the 39.7 GiB figure to rise.
+
+
 
 Stated plainly, because they are the real risk surface.
 
@@ -229,6 +273,9 @@ Stated plainly, because they are the real risk surface.
 - **Tested against a synthetic 3-file corpus**, not the published sample kit.
   Recall and the citation filter were verified against known gold files, but corpus
   variety beyond PDF/PNG/TXT is untested on hardware.
+- **The model cannot be upgraded.** See the scale ceiling above: fp32 is forced by
+  the ROCm segfault, and 14B fp32 exceeds the 48 GiB gate on weights alone. Treat
+  7B as fixed unless the bf16 crash is fixed.
 
 ## Running the checks
 
