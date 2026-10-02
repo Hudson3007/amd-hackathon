@@ -172,6 +172,7 @@ def build_index(root):
     # only by text printed inside them. Describing each image here, during the
     # index pass, turns them into ordinary searchable text that still cites
     # correctly. This runs against the startup budget, not the per-question one.
+    undescribed = []
     for image in images:
         description = describe_image(image.relpath)
         if description:
@@ -182,13 +183,23 @@ def build_index(root):
                     "kind": "image",
                 }
             )
+        else:
+            undescribed.append(image.relpath)
 
     with STATE.lock:
         STATE.chunks = chunks
         STATE.images = images
         STATE.root = root
-        STATE.stats = stats
+        STATE.stats = dict(stats, undescribed_images=undescribed)
         STATE.bm25 = BM25(chunks) if chunks else None
+
+    # An image with no caption contributes no chunk, so every question answered
+    # only by that image scores zero with no error anywhere. Make it loud.
+    if undescribed:
+        log(
+            f"WARNING {len(undescribed)}/{len(images)} images could not be "
+            f"described and are unretrievable: {undescribed}"
+        )
 
     log(f"index built: {len(chunks)} chunks in {time.time() - started:.1f}s")
     STATE.index_ready.set()
