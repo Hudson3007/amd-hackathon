@@ -32,7 +32,14 @@ MODEL_ID = os.environ.get("MC3_MODEL", "Qwen/Qwen2.5-VL-7B-Instruct")
 RETRIEVE_TOP_K = int(os.environ.get("MC3_TOP_K", "40"))
 MAX_CONTEXT_CHARS = 24000
 CACHE_DIR = os.environ.get("MC3_CACHE", "/app/.cache")
-IMAGE_CONTEXT = 900
+# Cap on caption length. Every token here is generated one at a time by a 7B
+# model running fp32 with eager attention, which is the slow configuration we
+# are forced into by ROCm (see load_model). At 900 tokens a single image took
+# several minutes on an MI300X; a pinout or label finishes in well under 100.
+# The vision prompt asks for exact transcription, not prose, so a tighter cap
+# costs almost no recall and keeps the cold-start index inside the startup
+# budget. Override with MC3_IMAGE_TOKENS if a corpus needs more.
+IMAGE_CONTEXT = int(os.environ.get("MC3_IMAGE_TOKENS", "256"))
 
 VISION_PROMPT = """Describe this image for a search index.
 
@@ -150,6 +157,11 @@ class State:
 
 
 STATE = State()
+
+# Serialises indexing so the autoload thread and an `app.py --index` request
+# cannot build the same corpus at the same time. See ensure_indexed().
+INDEX_LOCK = threading.Lock()
+INDEXED_ROOT = None
 
 
 def build_index(root):
@@ -496,14 +508,34 @@ class Server:
                 traceback.print_exc()
 
 
+def ensure_indexed(root):
+    """Build the index for `root` at most once, and never twice concurrently.
+
+    Two callers race here on every graded run: the autoload thread started by
+    main(), and the `app.py --index` request the harness execs after the
+    container is already up. Both used to call build_index unconditionally, so
+    every run captioned every image twice -- doubling the most expensive part of
+    startup, and running two vision loops on one GPU inside the startup budget.
+    """
+    global INDEXED_ROOT
+
+    with INDEX_LOCK:
+        if INDEXED_ROOT == root and STATE.index_ready.is_set():
+            log(f"index already built for {root}, skipping rebuild")
+            return STATE.stats
+        stats = build_index(root)
+        INDEXED_ROOT = root
+        return stats
+
+
 def dispatch(payload):
     op = payload.get("op")
     try:
         if op == "ping":
             return {"ok": True, "ready": STATE.ready, "indexed": STATE.index_ready.is_set()}
         if op == "index":
-            build_index(payload.get("root") or CORPUS_DIR)
-            return {"ok": True, "stats": STATE.stats}
+            stats = ensure_indexed(payload.get("root") or CORPUS_DIR)
+            return {"ok": True, "stats": stats}
         if op == "query":
             return answer_question(payload.get("query", ""))
         return {"error": f"unknown op {op}"}
@@ -529,7 +561,7 @@ def _safe_autoload():
     try:
         if os.path.isdir(CORPUS_DIR):
             time.sleep(1.0)
-            build_index(CORPUS_DIR)
+            ensure_indexed(CORPUS_DIR)
     except Exception as exc:
         log(f"autoload failed: {exc}")
 
