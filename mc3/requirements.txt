@@ -12,11 +12,18 @@
 # which must end in +rocm...  (the Dockerfile does this as a build step)
 
 # model runtime
-transformers
-tokenizers
+# Pinned, unlike everything else. Left unpinned, an install resolves to
+# transformers 5.x and huggingface_hub 2.x -- two major versions past the 4.57
+# line that the MI300X verification run actually exercised. Because --no-deps
+# suppresses resolution, a too-new transformers is not caught at install time;
+# it shows up later as an opaque processor or dtype error at model load.
+# These three are mutually consistent: transformers 4.57 requires
+# tokenizers>=0.22,<0.23 and huggingface_hub>=0.34,<1.0.
+transformers==4.57.6
+tokenizers==0.22.2
+huggingface_hub==0.36.0
 safetensors
 accelerate
-huggingface_hub
 
 # corpus parsers
 pypdf
