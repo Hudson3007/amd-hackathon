@@ -73,13 +73,15 @@ def parse_pdf(data):
 
         reader = PdfReader(io.BytesIO(data), strict=False)
         if getattr(reader, "is_encrypted", False):
-            # A no-password decrypt that silently yields nothing is the expected
-            # case here. Nothing inside is ever a graded answer.
-            try:
-                if reader.decrypt("") == 0:
-                    return ""
-            except Exception:
-                return ""
+            # An encrypted file is never a source, full stop. Do not attempt to
+            # decrypt it. decrypt("") succeeds whenever the file was encrypted
+            # with an empty user password, which is common, and that would feed
+            # the contents straight into retrieval. The brief grades exactly
+            # this case as unanswerable: the value IS inside the encrypted file,
+            # and quoting it means you read something you had no permission to
+            # read. We are never given a password, so refusing is the only
+            # correct behaviour regardless of what the file would allow.
+            return ""
         parts = []
         for page in reader.pages:
             try:
